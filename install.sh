@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 main() {
-release_tag='v0.1.2' # The release builder stamps this value.
+release_tag='v0.1.3' # The release builder stamps this value.
 repo=mfbaltaza/looped-releases
 base=${LOOPED_RELEASE_BASE:-https://github.com/$repo/releases}
 bin=$HOME/.local/bin/looped
@@ -9,6 +9,7 @@ data=${XDG_DATA_HOME:-$HOME/.local/share}/looped
 config=${XDG_CONFIG_HOME:-$HOME/.config}/looped
 unit=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/looped.service
 launcher=${XDG_DATA_HOME:-$HOME/.local/share}/applications/Looped.desktop
+icon=${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps/looped.svg
 no_start=${LOOPED_NO_START:-0}
 die() { printf 'Looped: %s\n' "$*" >&2; exit 1; }
 [[ $(uname -s) == Linux ]] || die 'This installer requires Linux.'
@@ -16,7 +17,7 @@ if [[ ${1:-} == --uninstall ]]; then
   if [[ $no_start != 1 ]]; then
     systemctl --user disable --now looped.service >/dev/null 2>&1 || true
   fi
-  rm -f "$bin" "$unit" "$launcher" "$config/port" "$config/data"
+  rm -f "$bin" "$unit" "$launcher" "$icon" "$config/port" "$config/data"
   if [[ $no_start != 1 ]]; then systemctl --user daemon-reload; fi
   printf 'Looped removed. Recordings and credentials remain in %s\n' "$data"
   exit 0
@@ -41,6 +42,30 @@ elif [[ -f $unit ]]; then
 fi
 [[ $port =~ ^[0-9]{1,5}$ ]] && ((10#$port > 0 && 10#$port < 65536)) || die 'LOOPED_PORT must be 1 through 65535.'
 [[ $data == /* && $HOME == /* && $data != *$'\n'* && $HOME != *$'\n'* ]] || die 'Use absolute paths without newlines.'
+pwfile=$data/password
+password=
+wrote_password=0
+trim() { local s=$1; s=${s#"${s%%[![:space:]]*}"}; printf '%s' "${s%"${s##*[![:space:]]}"}"; }
+if [[ ! -s $pwfile ]]; then
+  if [[ -n ${LOOPED_PASSWORD:-} ]]; then
+    [[ $LOOPED_PASSWORD != *$'\n'* ]] || die 'LOOPED_PASSWORD must not contain a newline.'
+    password=$(trim "$LOOPED_PASSWORD")
+  else
+    local first second
+    ( exec 3<>/dev/tty ) 2>/dev/null || die 'Looped needs a password. Set LOOPED_PASSWORD and rerun this command.'
+    while :; do
+      read -rsp 'Choose a password for Looped: ' first </dev/tty || die 'No password was entered.'
+      printf '\n' >&2
+      read -rsp 'Repeat it: ' second </dev/tty || die 'No password was entered.'
+      printf '\n' >&2
+      first=$(trim "$first"); second=$(trim "$second")
+      if [[ -z $first ]]; then printf 'The password cannot be blank. Try again.\n' >&2
+      elif [[ $first != "$second" ]]; then printf 'The passwords do not match. Try again.\n' >&2
+      else password=$first; break; fi
+    done
+  fi
+  [[ -n $password ]] || die 'LOOPED_PASSWORD must not be blank.'
+fi
 url=http://localhost:$port
 if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
   printf 'Installing FFmpeg. sudo may ask for your password.\n'
@@ -65,7 +90,7 @@ replacing=0
 restore() {
   local file
   if [[ $no_start != 1 ]]; then systemctl --user stop looped.service >/dev/null 2>&1 || true; fi
-  for file in "$bin" "$unit" "$launcher" "$config/port" "$config/data"; do
+  for file in "$bin" "$unit" "$launcher" "$icon" "$config/port" "$config/data"; do
     local key=${file##*/}
     if [[ -f $stage/backup/$key ]]; then cp -p "$stage/backup/$key" "$file"; else rm -f "$file"; fi
   done
@@ -74,7 +99,7 @@ restore() {
     if [[ -f $stage/backup/looped ]]; then systemctl --user start looped.service || true; fi
   fi
 }
-cleanup() { local status=$?; if ((replacing && status != 0)); then restore; printf 'Previous installation restored.\n' >&2; fi; rm -rf "$stage"; }
+cleanup() { local status=$?; if ((replacing && status != 0)); then restore; printf 'Previous installation restored.\n' >&2; fi; if ((status != 0 && wrote_password)); then rm -f "$pwfile"; fi; rm -rf "$stage"; }
 trap cleanup EXIT
 asset=looped-linux-$arch
 curl -fsSL "$base/download/$release_tag/$asset" -o "$stage/looped"
@@ -90,7 +115,8 @@ if [[ $no_start != 1 ]] && curl -fsS --max-time 2 -o /dev/null "$url/api/me" 2>/
   [[ $pid =~ ^[1-9][0-9]*$ && $(readlink "/proc/$pid/exe") == "$bin" ]] || die "Port $port belongs to another app. Set LOOPED_PORT on your first install."
 fi
 mkdir -p "$stage/backup" "$config" "$data" "$(dirname "$unit")" "$(dirname "$launcher")"
-for file in "$bin" "$unit" "$launcher" "$config/port" "$config/data"; do [[ ! -f $file ]] || cp -p "$file" "$stage/backup/${file##*/}"; done
+if [[ -n $password ]]; then (umask 077; printf '%s' "$password" > "$pwfile"); wrote_password=1; fi
+for file in "$bin" "$unit" "$launcher" "$icon" "$config/port" "$config/data"; do [[ ! -f $file ]] || cp -p "$file" "$stage/backup/${file##*/}"; done
 replacing=1
 if [[ $no_start != 1 && -f $stage/backup/looped.service ]]; then systemctl --user stop looped.service; fi
 mv "$stage/looped" "$bin"
@@ -111,7 +137,16 @@ systemd_quote() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//%/%%}; pr
 open=$(command -v omarchy-launch-webapp || command -v xdg-open || true)
 if [[ -n $open ]]; then
   escaped=${open//\\/\\\\}; escaped=${escaped//\"/\\\"}; escaped=${escaped//\$/\\\$}; escaped=${escaped//\`/\\\`}; escaped=${escaped//%/%%}
-  printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=Looped\nComment=Record your screen locally\nExec="%s" %s\nIcon=video-display\nTerminal=false\n' "$escaped" "$url" > "$launcher"
+  mkdir -p "$(dirname "$icon")"
+  cat > "$icon" <<'SVG'
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="8" fill="#ff4a1c"/>
+  <path d="M16 16c-2.2-3.3-4-4.6-6.1-4.6a4.6 4.6 0 1 0 0 9.2c2.100 0 3.900-1.300 6.100-4.600Zm0 0c2.200 3.300 4 4.600 6.100 4.600a4.600 4.600 0 1 0 0-9.200c-2.100 0-3.900 1.300-6.100 4.600Z" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+SVG
+  printf '[Desktop Entry]\nVersion=1.0\nType=Application\nName=Looped\nComment=Record your screen locally\nExec="%s" %s\nIcon=looped\nTerminal=false\n' "$escaped" "$url" > "$launcher"
+  if command -v gtk-update-icon-cache >/dev/null; then gtk-update-icon-cache -q -t -f "${icon%/scalable/apps/*}" >/dev/null 2>&1 || true; fi
+  if command -v update-desktop-database >/dev/null; then update-desktop-database "$(dirname "$launcher")" >/dev/null 2>&1 || true; fi
 fi
 if [[ $no_start != 1 ]]; then
   systemctl --user daemon-reload
@@ -126,6 +161,6 @@ if [[ $no_start != 1 ]]; then
 fi
 replacing=0
 printf 'Looped %s installed. Open %s\nRecordings: %s\n' "$release_tag" "$url" "$data"
-if [[ -f $data/password ]]; then printf 'Password: %s\n' "$(cat "$data/password")"; fi
+if ((wrote_password)); then printf 'Sign in with the password you chose.\n'; fi
 }
 main "$@"

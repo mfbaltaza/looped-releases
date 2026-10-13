@@ -18,6 +18,9 @@ install FFmpeg through apt, dnf, or pacman with sudo. On other distributions, in
 both commands first. Looped starts as a user service and starts again when you sign in.
 Open **Looped** in your app launcher or visit <http://localhost:4747>.
 
+The installer asks you to choose a password for Looped. Type it twice. Nothing shows
+while you type. Remember it, because you need it to sign in.
+
 ## Install on Windows
 
 Use Windows 10 or 11 on x86-64 or ARM64. Open PowerShell as your normal user and run:
@@ -32,13 +35,33 @@ FFmpeg and ffprobe yourself. Open a new PowerShell window after changing PATH.
 Looped adds Start menu and sign-in shortcuts. Open **Looped** or visit
 <http://localhost:4747>.
 
+The installer asks you to choose a password for Looped. Type it twice. Nothing shows
+while you type. Remember it, because you need it to sign in.
+
 Both installers download a release-specific binary, check its SHA-256 checksum and
 version, and then replace the installed program. These checks detect corruption or
 mixed release files. They do not authenticate a publisher independently of GitHub.
 
+To install without the password prompt, for example from a script, set `LOOPED_PASSWORD`
+first. On Linux:
+
+```sh
+curl -fsSL https://github.com/mfbaltaza/looped-releases/releases/latest/download/install.sh | LOOPED_PASSWORD='your password' bash
+```
+
+On Windows:
+
+```powershell
+$env:LOOPED_PASSWORD = 'your password'; irm https://github.com/mfbaltaza/looped-releases/releases/latest/download/install.ps1 | iex
+```
+
+The password prompt appears only on a new install. Updates keep the password you already
+have, and the installer ignores `LOOPED_PASSWORD` then. If no password can be asked for
+and `LOOPED_PASSWORD` is not set, the installer stops and changes nothing.
+
 ## Make your first recording
 
-1. Open Looped and sign in with the password printed by the installer.
+1. Open Looped and sign in with the password you chose during installation.
 2. Choose **New recording**, then **Tab** or **Full screen**. Add a microphone or camera if you want them and allow browser access.
 3. Choose **Start recording**, then select a source in the browser's sharing dialog.
 4. If the browser offers an audio checkbox, enable it to include the shared audio.
@@ -86,8 +109,10 @@ On Windows, the executable and launcher live in `%LOCALAPPDATA%\Looped`.
 Recordings and credentials live in `%LOCALAPPDATA%\Looped\data`.
 `settings.json` in the installation directory records the data path and port.
 
-Read the `password` file inside your data directory to recover your password.
-Keep this file and the session secret private. To back up, stop Looped and copy the
+To see or change your password, open the `password` file inside your data directory.
+It holds the password on one line. To change it, edit the file and save it, then restart
+Looped. On Linux, run `systemctl --user restart looped`. On Windows, sign out and back in,
+or rerun the installer. Keep this file and the session secret private. To back up, stop Looped and copy the
 entire data directory to another disk. Restore that directory before starting Looped.
 Exported video files can be backed up independently.
 

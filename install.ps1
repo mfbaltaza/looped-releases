@@ -1,6 +1,6 @@
 param([switch]$Uninstall)
 $ErrorActionPreference = 'Stop'
-$releaseTag = 'v0.1.2' # The release builder stamps this value.
+$releaseTag = 'v0.1.3' # The release builder stamps this value.
 $repo = 'mfbaltaza/looped-releases'
 $base = if ($env:LOOPED_RELEASE_BASE) { $env:LOOPED_RELEASE_BASE.TrimEnd('/') } else { "https://github.com/$repo/releases" }
 $dir = Join-Path $env:LOCALAPPDATA 'Looped'
@@ -43,6 +43,30 @@ if (Test-Path $config) {
 if ($port -notmatch '^\d{1,5}$' -or [int]$port -lt 1 -or [int]$port -gt 65535) { throw 'LOOPED_PORT must be 1 through 65535.' }
 if (-not [IO.Path]::IsPathRooted($data) -or $data -match '[\r\n]') { throw 'Use an absolute data path without newlines.' }
 $url = "http://localhost:$port"
+$passwordFile = Join-Path $data 'password'
+$newPassword = $null
+$wrotePassword = $false
+function Read-LoopedPassword($prompt) {
+    $secure = Read-Host $prompt -AsSecureString
+    $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr).Trim() } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+}
+if (-not ((Test-Path $passwordFile) -and (Get-Item $passwordFile).Length -gt 0)) {
+    if ($env:LOOPED_PASSWORD) {
+        if ($env:LOOPED_PASSWORD -match '[\r\n]') { throw 'LOOPED_PASSWORD must not contain a newline.' }
+        $newPassword = $env:LOOPED_PASSWORD.Trim()
+    } else {
+        if ([Console]::IsInputRedirected -or -not [Environment]::UserInteractive) { throw 'Looped needs a password. Set LOOPED_PASSWORD and rerun this command.' }
+        while ($true) {
+            $first = Read-LoopedPassword 'Choose a password for Looped'
+            $second = Read-LoopedPassword 'Repeat it'
+            if (-not $first) { Write-Host 'The password cannot be blank. Try again.' }
+            elseif ($first -cne $second) { Write-Host 'The passwords do not match. Try again.' }
+            else { $newPassword = $first; break }
+        }
+    }
+    if (-not $newPassword) { throw 'LOOPED_PASSWORD must not be blank.' }
+}
 $processor = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 $arch = switch ($processor) { 'AMD64' { 'amd64' }; 'ARM64' { 'arm64' }; default { throw "Unsupported processor $processor." } }
 if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue) -or -not (Get-Command ffprobe -ErrorAction SilentlyContinue)) {
@@ -98,6 +122,8 @@ try {
         }
     }
     New-Item -ItemType Directory -Force -Path $data | Out-Null
+    # WriteAllText writes UTF-8 without a byte-order mark, which the server would read as part of the password.
+    if ($newPassword) { [IO.File]::WriteAllText($passwordFile, $newPassword); $wrotePassword = $true }
     $replacing = $true
     Stop-Looped
     if (Test-Path $exe) { [IO.File]::Replace($tmp, $exe, (Join-Path $stage 'previous.exe')) } else { [IO.File]::Move($tmp, $exe) }
@@ -151,7 +177,7 @@ if (-not (Get-Process looped -ErrorAction SilentlyContinue | Where-Object { `$_.
     $replacing = $false
     Write-Host "Looped $releaseTag installed. Open $url"
     Write-Host "Recordings: $data"
-    if (Test-Path (Join-Path $data 'password')) { Write-Host "Password: $((Get-Content -Raw (Join-Path $data 'password')).Trim())" }
+    if ($wrotePassword) { Write-Host 'Sign in with the password you chose.' }
     if (-not $noStart) { Start-Process $url }
 } catch {
     if ($replacing) {
@@ -162,5 +188,6 @@ if (-not (Get-Process looped -ErrorAction SilentlyContinue | Where-Object { `$_.
         if (-not $noStart -and (Test-Path $start)) { & $powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $start }
         Write-Warning 'Previous installation restored.'
     }
+    if ($wrotePassword) { Remove-Item -Force $passwordFile -ErrorAction SilentlyContinue }
     throw
 } finally { Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue }
